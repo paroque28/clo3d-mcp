@@ -152,20 +152,26 @@ that pumps the main thread. Out of scope unless unattended automation becomes a 
 ## 7. Repo structure (after restructure)
 
 ```
-clo3d-mcp/                 (fork)
-├── PLAN.md                ← this file
-├── README.md             (rewritten around the two modes)
-├── sdk/                   (unchanged — vendored CLO SDK headers)
-├── clo_agent/            ← NEW: the main-thread core
-│   ├── __init__.py
-│   ├── api.py            (verified helpers; correct pybind11 signatures)
-│   ├── runner.py        (exec a script/spec; dump result.json + snapshots)
-│   └── schema.py        (spec + result JSON schemas)
-├── plugin/               (Mode B — hardened live poller, marked experimental)
-│   └── clo3d_mcp_plugin.py
-├── src/clo3d_mcp/        (MCP server: tool layer; write_script/read_results/run_code)
-└── tests/
+clo3d-mcp/                    (independent project, based on Ubani-Studio/clo3d-mcp)
+├── README.md
+├── protocol/                 Command/Result JSON contract
+├── server/                   MCP client side
+│   ├── pyproject.toml
+│   └── src/clo3d_mcp/        server.py (run_code/introspect/snapshot + wrappers),
+│                             connection.py (file IPC, unified Result)
+│   └── tests/                mock CLO agent + protocol tests
+├── runtimes/
+│   ├── clo.py               ← the CLO-side agent: one shared dispatch() core,
+│   │                          two modes (once reliable / serve experimental)
+│   └── cpp-plugin/           future socket backend (scaffold)
+├── sdk/                      vendored CLO SDK headers
+└── docs/                     PLAN.md (this file), api-signatures.md
 ```
+
+> Note: an earlier draft of this plan proposed separate `clo_agent/` + `plugin/` +
+> `src/` trees. The implementation collapsed the two CLO-side artifacts into the single
+> `runtimes/clo.py` (shared core, thin transports) — fewer moving parts, no duplicated
+> signatures. The layout above is the real one.
 
 ---
 
