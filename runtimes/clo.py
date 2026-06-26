@@ -43,6 +43,11 @@ MODE = os.environ.get("CLO_AGENT_MODE", "once").strip().lower()
 DEBUG = os.environ.get("CLO_AGENT_DEBUG", "1") != "0"
 POLL_INTERVAL = 0.1
 
+# Bump this on every change. Printed on each load and echoed in every Result, so it
+# is always obvious which version of this file CLO actually has loaded (CLO keeps one
+# long-lived interpreter, so stale copies can linger across reloads).
+VERSION = "0.3.0"
+
 
 def _log(msg, level="INFO"):
     """Flushed print — CLO buffers stdout, so always flush to the Log Console."""
@@ -219,6 +224,7 @@ def dispatch(command):
 
     return {
         "ok": err is None,
+        "version": VERSION,
         "id": cid,
         "type": ctype,
         "result": result,
@@ -327,13 +333,8 @@ def _poll_loop(my_gen):
     _log("serve: stopped (gen %d)" % my_gen)
 
 
-def serve():
-    """Start a single background poller; supersede any previous one."""
-    prev = getattr(sys, "_CLO_AGENT_GEN", 0)
-    my_gen = prev + 1
-    sys._CLO_AGENT_GEN = my_gen
-    if prev:
-        _log("serve: superseding previous instance (gen %d)" % prev)
+def serve(my_gen):
+    """Start a single background poller for the given (already-bumped) generation."""
     t = threading.Thread(target=_poll_loop, args=(my_gen,), daemon=True)
     t.start()
     time.sleep(0.3)
@@ -346,8 +347,14 @@ def serve():
 # Entry point
 # ---------------------------------------------------------------------------
 
-_log("clo.py loaded. mode=%s in_clo3d=%s agent_dir=%s" % (MODE, IN_CLO3D, AGENT_DIR))
+# Every load bumps the shared generation, so any poll loop still running in CLO's
+# persistent interpreter from an earlier load sees the change and exits. This
+# self-heals the stale-instance pile-up that produces confusing duplicate log lines.
+_GEN = getattr(sys, "_CLO_AGENT_GEN", 0) + 1
+sys._CLO_AGENT_GEN = _GEN
+_log("clo.py v%s loaded. gen=%d mode=%s in_clo3d=%s agent_dir=%s"
+     % (VERSION, _GEN, MODE, IN_CLO3D, AGENT_DIR))
 if MODE == "serve":
-    serve()
+    serve(_GEN)
 else:
     run_once()
