@@ -43,10 +43,58 @@ MODE = os.environ.get("CLO_AGENT_MODE", "once").strip().lower()
 DEBUG = os.environ.get("CLO_AGENT_DEBUG", "1") != "0"
 POLL_INTERVAL = 0.1
 
-# Bump this on every change. Printed on each load and echoed in every Result, so it
-# is always obvious which version of this file CLO actually has loaded (CLO keeps one
-# long-lived interpreter, so stale copies can linger across reloads).
-VERSION = "0.3.0"
+# Printed on each load and echoed in every Result, so it is always obvious which version
+# of this file CLO actually has loaded (CLO keeps one long-lived interpreter, so stale
+# copies can linger across reloads). The git commit + dirty flag below is the exact id.
+VERSION = "0.3.1"
+
+
+def _git_info():
+    """Best-effort git identity of this checkout: short commit, dirty flag, branch.
+
+    Resolves the repo from CLO_AGENT_REPO, else this file's directory. Values are None
+    if git/the repo can't be read (file loaded via exec() with no __file__, git not on
+    PATH, or not a checkout) — in which case the printed id falls back to VERSION.
+    """
+    info = {"commit": None, "dirty": None, "branch": None}
+    repo = os.environ.get("CLO_AGENT_REPO")
+    if not repo:
+        try:
+            repo = os.path.dirname(os.path.abspath(__file__))
+        except NameError:
+            repo = None
+    if not repo:
+        return info
+    import subprocess
+
+    def _git(*args):
+        for git_bin in ("git", "/usr/bin/git", "/opt/homebrew/bin/git"):
+            try:
+                out = subprocess.check_output([git_bin, "-C", repo, *args],
+                                              stderr=subprocess.DEVNULL)
+                return out.decode().strip()
+            except FileNotFoundError:
+                continue
+            except Exception:
+                return None
+        return None
+
+    info["commit"] = _git("rev-parse", "--short", "HEAD")
+    info["branch"] = _git("rev-parse", "--abbrev-ref", "HEAD")
+    status = _git("status", "--porcelain")
+    if status is not None:
+        info["dirty"] = bool(status.strip())
+    return info
+
+
+GIT_INFO = _git_info()
+
+
+def _version_str():
+    g = GIT_INFO
+    if g.get("commit"):
+        return "v%s @ %s%s" % (VERSION, g["commit"], "-dirty" if g.get("dirty") else "")
+    return "v%s (commit unknown)" % VERSION
 
 
 def _log(msg, level="INFO"):
@@ -225,6 +273,7 @@ def dispatch(command):
     return {
         "ok": err is None,
         "version": VERSION,
+        "git": GIT_INFO,
         "id": cid,
         "type": ctype,
         "result": result,
@@ -352,8 +401,8 @@ def serve(my_gen):
 # self-heals the stale-instance pile-up that produces confusing duplicate log lines.
 _GEN = getattr(sys, "_CLO_AGENT_GEN", 0) + 1
 sys._CLO_AGENT_GEN = _GEN
-_log("clo.py v%s loaded. gen=%d mode=%s in_clo3d=%s agent_dir=%s"
-     % (VERSION, _GEN, MODE, IN_CLO3D, AGENT_DIR))
+_log("clo.py %s loaded. gen=%d mode=%s in_clo3d=%s agent_dir=%s"
+     % (_version_str(), _GEN, MODE, IN_CLO3D, AGENT_DIR))
 if MODE == "serve":
     serve(_GEN)
 else:
