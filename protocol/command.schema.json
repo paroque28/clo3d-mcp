@@ -1,0 +1,29 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/paroque28/clo3d-mcp/protocol/command.schema.json",
+  "title": "CLO Command",
+  "description": "A command sent by the client to a CLO backend. Transport-agnostic: the same object is written to task.py-style files, request.json, or sent over a socket.",
+  "type": "object",
+  "required": ["type"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Optional correlation id echoed back in the Result."
+    },
+    "type": {
+      "type": "string",
+      "description": "run_code | introspect | snapshot | <typed op name>",
+      "examples": ["run_code", "introspect", "snapshot", "set_fabric_color"]
+    },
+    "code": {
+      "type": "string",
+      "description": "Python source to exec against the CLO API. Required when type == run_code. The CLO *_api modules and the helper functions are in scope; set RESULT = <json-able> to return data."
+    },
+    "params": {
+      "type": "object",
+      "description": "Arguments for a typed op.",
+      "additionalProperties": true
+    }
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/paroque28/clo3d-mcp/protocol/result.schema.json",
+  "title": "CLO Result",
+  "description": "What a backend writes back after executing a Command on CLO's main thread. Produced by runtimes/python-script/clo_agent.py and (eventually) the C++ plugin, byte-compatible.",
+  "type": "object",
+  "required": ["ok", "in_clo3d"],
+  "additionalProperties": true,
+  "properties": {
+    "ok": {
+      "type": "boolean",
+      "description": "True if the command executed without a fatal task error."
+    },
+    "id": {
+      "type": "string",
+      "description": "Correlation id echoed from the Command, if any."
+    },
+    "mode": {
+      "type": "string",
+      "description": "task | introspect | error — how the run was dispatched."
+    },
+    "result": {
+      "description": "The command's structured output (any JSON value), or null."
+    },
+    "snapshot": {
+      "type": ["object", "null"],
+      "description": "Snapshot info.",
+      "properties": {
+        "requested": {"type": "string"},
+        "returned": {},
+        "exists": {"type": "boolean"}
+      }
+    },
+    "stdout": {
+      "type": "string",
+      "description": "Captured stdout from the task (echoed to CLO's Log Console too)."
+    },
+    "errors": {
+      "type": "object",
+      "description": "Per-API-call errors keyed by a label, so a partial read-back still returns.",
+      "additionalProperties": {"type": "string"}
+    },
+    "task_error": {
+      "type": ["string", "null"],
+      "description": "Traceback if the whole task aborted, else null."
+    },
+    "started": {"type": "string"},
+    "finished": {"type": "string"},
+    "in_clo3d": {
+      "type": "boolean",
+      "description": "False if run outside CLO (the *_api modules were unavailable)."
+    },
+    "agent_dir": {"type": "string"}
+  }
+}

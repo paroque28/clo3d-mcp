@@ -4,8 +4,9 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 
-# Ignore build directories
+# Ignore build directories (any level — e.g. runtimes/cpp-plugin/build/)
 /build/
+build/
 /bin/
 /dist/
 

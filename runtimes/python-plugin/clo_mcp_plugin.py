@@ -21,8 +21,42 @@ REQUEST_FILE = os.path.join(COMM_DIR, "request.json")
 RESPONSE_FILE = os.path.join(COMM_DIR, "response.json")
 POLL_INTERVAL = 0.1
 
+# Verbose logging. Set CLO3D_MCP_DEBUG=0 in the environment to quiet it down.
+DEBUG = os.environ.get("CLO3D_MCP_DEBUG", "1") != "0"
+# Emit a heartbeat line every N idle poll iterations so we can SEE the
+# background thread is actually being scheduled by CLO's interpreter.
+HEARTBEAT_EVERY = 100  # ~10s at POLL_INTERVAL=0.1
+
 _server_running = False
 _server_thread = None
+
+
+def _log(msg, level="INFO"):
+    """Print a flushed, timestamped log line.
+
+    CLO's embedded Python buffers stdout, so without an explicit flush the
+    Log Console can show nothing (or print lines out of order). Always flush.
+    """
+    try:
+        ts = time.strftime("%H:%M:%S")
+    except Exception:
+        ts = "?"
+    line = "[CLO MCP] " + ts + " [" + level + "] " + str(msg)
+    try:
+        print(line)
+        sys.stdout.flush()
+    except Exception:
+        # Last resort: never let logging crash the loop.
+        try:
+            sys.stderr.write(line + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+
+
+def _debug(msg):
+    if DEBUG:
+        _log(msg, level="DEBUG")
 
 
 # ---------------------------------------------------------------------------
@@ -42,7 +76,7 @@ def handle_get_project_info(params):
     minor = utility_api.GetMinorVersion()
     patch = utility_api.GetPatchVersion()
     pattern_count = pattern_api.GetPatternCount()
-    fabric_count = fabric_api.GetFabricCount()
+    fabric_count = fabric_api.GetFabricCount(True)
     colorway_count = utility_api.GetColorwayCount()
     return {
         "project_name": name,
@@ -163,7 +197,7 @@ def handle_get_arrangement_list(params):
 # -- Fabric --
 
 def handle_get_fabric_count(params):
-    count = fabric_api.GetFabricCount()
+    count = fabric_api.GetFabricCount(True)
     return {"count": count}
 
 
@@ -223,7 +257,7 @@ def handle_export_obj(params):
     file_path = params["file_path"]
     options = params.get("options", {})
     if options:
-        opt = export_api.NewImportExportOption()
+        opt = export_api.ImportExportOption()
         for key, val in options.items():
             if hasattr(opt, key):
                 setattr(opt, key, val)
@@ -333,8 +367,9 @@ def handle_simulate(params):
 
 def handle_set_simulation_quality(params):
     quality = params["quality"]
-    utility_api.SetSimulationQuality(quality)
-    return {"quality": quality}
+    simulation_mode = params.get("simulation_mode", 0)
+    utility_api.SetSimulationQuality(quality, simulation_mode)
+    return {"quality": quality, "simulation_mode": simulation_mode}
 
 
 # -- Colorway --
@@ -368,8 +403,9 @@ def handle_set_colorway_name(params):
 
 def handle_copy_colorway(params):
     index = params["colorway_index"]
-    utility_api.CopyColorway(index)
-    return {"copied": True, "source_index": index}
+    copy_option = params.get("copy_option", 0)
+    utility_api.CopyColorway(index, copy_option)
+    return {"copied": True, "source_index": index, "copy_option": copy_option}
 
 
 def handle_delete_colorway(params):
@@ -471,9 +507,12 @@ def process_command(data):
     req_id = request.get("id")
     cmd_type = request.get("type")
     params = request.get("params", {})
+    _log("command received: type=" + str(cmd_type) + " id=" + str(req_id)
+         + " params=" + json.dumps(params))
 
     handler = HANDLERS.get(cmd_type)
     if not handler:
+        _log("unknown command: " + str(cmd_type), level="ERROR")
         return json.dumps({
             "id": req_id,
             "status": "error",
@@ -482,8 +521,11 @@ def process_command(data):
 
     try:
         result = handler(params)
+        _debug("command ok: type=" + str(cmd_type) + " id=" + str(req_id))
         return json.dumps({"id": req_id, "status": "success", "result": result})
     except Exception as e:
+        _log("handler raised for type=" + str(cmd_type) + " id=" + str(req_id)
+             + ": " + repr(e), level="ERROR")
         return json.dumps({
             "id": req_id,
             "status": "error",
@@ -491,57 +533,85 @@ def process_command(data):
         })
 
 
-def poll_loop():
-    """Poll for request files and process them."""
+def poll_loop(my_gen=0):
+    """Poll for request files and process them.
+
+    my_gen is this instance's generation number. If a newer run supersedes us
+    (sys._CLO_MCP_GEN changes), we exit, so only one poller stays active even
+    after the script is re-run several times in CLO's persistent interpreter.
+    """
     global _server_running
 
+    try:
+        tid = threading.get_ident()
+    except Exception:
+        tid = "?"
+    _log("poll_loop ENTERED on thread id=" + str(tid)
+         + " (if you never see this line, CLO is not scheduling the background thread)")
+
     # Create comm directory
-    if not os.path.exists(COMM_DIR):
-        os.makedirs(COMM_DIR)
+    try:
+        if not os.path.exists(COMM_DIR):
+            os.makedirs(COMM_DIR)
+            _debug("created comm dir: " + COMM_DIR)
+        else:
+            _debug("comm dir already exists: " + COMM_DIR)
+    except Exception as e:
+        _log("FAILED to create comm dir " + COMM_DIR + ": " + repr(e), level="ERROR")
 
     # Clean up stale files
     for f in [REQUEST_FILE, RESPONSE_FILE]:
         if os.path.exists(f):
             try:
                 os.remove(f)
-            except OSError:
-                pass
+                _debug("removed stale file: " + f)
+            except OSError as e:
+                _debug("could not remove stale file " + f + ": " + repr(e))
 
-    print("[CLO MCP] Listening for commands in: " + COMM_DIR)
+    _log("Listening for commands in: " + COMM_DIR)
 
-    while _server_running:
+    iterations = 0
+    handled = 0
+    while _server_running and getattr(sys, "_CLO_MCP_GEN", my_gen) == my_gen:
+        iterations += 1
+        if DEBUG and iterations % HEARTBEAT_EVERY == 0:
+            _debug("heartbeat: alive, polled " + str(iterations)
+                   + " times, handled " + str(handled) + " request(s)")
         try:
             if os.path.exists(REQUEST_FILE):
                 # Read request
                 with open(REQUEST_FILE, "r") as f:
                     data = f.read()
+                _debug("request file detected (" + str(len(data)) + " bytes)")
 
                 # Delete request file
                 try:
                     os.remove(REQUEST_FILE)
-                except OSError:
-                    pass
+                except OSError as e:
+                    _debug("could not remove request file: " + repr(e))
 
                 if data.strip():
                     # Process and write response
                     response = process_command(data)
 
-                    # Write to temp file first, then rename (atomic)
-                    tmp_file = RESPONSE_FILE + ".tmp"
+                    # Per-instance temp name avoids collisions if a stale
+                    # instance is still running; os.replace is atomic and
+                    # overwrites, so there is no remove/rename race window.
+                    tmp_file = (RESPONSE_FILE + "." + str(my_gen)
+                                + "." + str(tid) + ".tmp")
                     with open(tmp_file, "w") as f:
                         f.write(response)
-
-                    # Rename to final path
-                    if os.path.exists(RESPONSE_FILE):
-                        os.remove(RESPONSE_FILE)
-                    os.rename(tmp_file, RESPONSE_FILE)
+                    os.replace(tmp_file, RESPONSE_FILE)
+                    handled += 1
+                    _debug("response written (" + str(len(response)) + " bytes)")
 
         except Exception as e:
-            print("[CLO MCP] Error: " + str(e))
+            _log("poll error: " + repr(e), level="ERROR")
 
         time.sleep(POLL_INTERVAL)
 
-    print("[CLO MCP] Server stopped")
+    _log("Server stopped (gen " + str(my_gen) + ", handled "
+         + str(handled) + " request(s))")
 
 
 # ---------------------------------------------------------------------------
@@ -552,14 +622,33 @@ def start():
     """Start the MCP plugin."""
     global _server_running, _server_thread
 
-    if _server_running:
-        print("[CLO MCP] Already running")
-        return
+    # Singleton across repeated runs in CLO's persistent interpreter.
+    # Bump a generation counter on `sys` (it survives script re-execution, so a
+    # fresh module namespace can still see it). Any previously-started poll loop
+    # checks this counter and exits when it changes — clicking Run replaces the
+    # instance instead of stacking another poller.
+    prev_gen = getattr(sys, "_CLO_MCP_GEN", 0)
+    my_gen = prev_gen + 1
+    sys._CLO_MCP_GEN = my_gen
+    if prev_gen:
+        _log("superseding previous instance (gen " + str(prev_gen) + ")")
 
+    _log("start() called. gen=" + str(my_gen) + " IN_CLO3D=" + str(IN_CLO3D)
+         + " COMM_DIR=" + COMM_DIR + " DEBUG=" + str(DEBUG))
     _server_running = True
-    _server_thread = threading.Thread(target=poll_loop, daemon=True)
+    _server_thread = threading.Thread(target=poll_loop, args=(my_gen,), daemon=True)
     _server_thread.start()
-    print("[CLO MCP] Plugin started")
+    _log("Plugin started (spawned poll thread)")
+    # Give the thread a moment, then report whether it actually came alive.
+    try:
+        time.sleep(0.3)
+        alive = _server_thread.is_alive()
+        _log("poll thread is_alive=" + str(alive))
+        if not alive:
+            _log("poll thread did NOT start — CLO is not running Python background "
+                 "threads. The plugin cannot poll this way.", level="ERROR")
+    except Exception as e:
+        _debug("post-start check failed: " + repr(e))
 
 
 def stop():
@@ -567,16 +656,20 @@ def stop():
     global _server_running, _server_thread
 
     if not _server_running:
-        print("[CLO MCP] Not running")
+        _log("Not running")
         return
 
     _server_running = False
     if _server_thread:
         _server_thread.join(timeout=5)
         _server_thread = None
-    print("[CLO MCP] Plugin stopped")
+    _log("Plugin stopped")
 
 
 # Auto-start
+_log("module loaded. __name__=" + str(__name__) + " IN_CLO3D=" + str(IN_CLO3D))
 if __name__ == "__main__" or IN_CLO3D:
     start()
+else:
+    _log("auto-start skipped (not __main__ and not IN_CLO3D); call start() manually",
+         level="WARN")
