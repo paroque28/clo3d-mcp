@@ -18,11 +18,11 @@
     },
     "code": {
       "type": "string",
-      "description": "Python source to exec against the CLO API. Required when type == run_code. The CLO *_api modules and the helper functions are in scope; set RESULT = <json-able> to return data."
+      "description": "Python source to exec against the CLO API. Required when type == run_code. The CLO *_api modules and the helper functions are in scope; set RESULT = <json-able> to return data. May appear here (top level) or inside params.code — clients that wrap all args in params (e.g. the MCP server's send_command) put it there, and dispatch() accepts both."
     },
     "params": {
       "type": "object",
-      "description": "Arguments for a typed op.",
+      "description": "Arguments for a typed op (e.g. snapshot's path), and where run_code's `code` lands when a client wraps args in params.",
       "additionalProperties": true
     }
   }

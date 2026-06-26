@@ -28,10 +28,40 @@ client ◄──TCP──── socket thread (send Result JSON)
   `GetObjectNameTreeToAddAction`, `GetPositionIndexToAddAction` (see
   `sdk/Samples/CloEventPlugin`).
 
+## Recommended implementation: delegate to the Python `dispatch`, don't reimplement it
+
+Do **not** re-wrap the ~400 CLO API methods in C++. The whole logic — `dispatch()`,
+`run_code`, `introspect`, snapshots, the verified signatures — already exists in
+`runtimes/clo.py`. The C++ plugin should be *only* the two things Python can't provide:
+
+1. a socket server on a worker thread (an OS thread, which CLO does not starve), and
+2. a **main-thread pump** (`QMetaObject::invokeMethod(..., Qt::QueuedConnection)`).
+
+On the main thread it then hands the received command string to CLO's Python and calls
+`clo.dispatch(command)`, returning the JSON Result over the socket. One dispatch
+implementation, two transports — exactly the protocol promise. This keeps the C++ to a
+few hundred lines of plumbing instead of a second full API binding.
+
+## Why this stage is NOT implemented in this repo (honest)
+
+It cannot be finished or verified without:
+
+- the CLO **plugin SDK build** (Qt + the `MV_CLO_SCENE_API` libs) and a signing/loadable
+  plugin on this machine — none of which exist here, so any C++ committed now would be
+  *plausible but untested*, the exact failure mode to avoid;
+- confirming **one SDK capability**: how a C++ plugin invokes CLO's embedded Python on the
+  main thread (the binary exposes `HeadlessApiController::ExecutePython`, but the
+  public-SDK entry point for "run this Python string in the live session" is unconfirmed).
+  If that path is unavailable, the fallback is to dispatch via the C++ CLO API directly —
+  more code, no Python reuse.
+
+So this directory stays a **scaffold + design** on purpose. Building it is a real task
+gated on a local CLO-SDK toolchain; the design above is ready to execute against one.
+
 ## When to build this
 
 Only if unattended / hands-off automation is required (a render or variation farm
-driven with no human in CLO). For interactive design, `runtimes/python-script` is
+driven with no human in CLO). For interactive design, `runtimes/clo.py` (MODE=once) is
 sufficient and free. See `docs/PLAN.md` §5 (Mode C) and §11.
 
 ## Build (placeholder)

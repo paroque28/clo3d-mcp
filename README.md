@@ -52,6 +52,12 @@ docs/              PLAN.md (architecture), api-signatures.md (verified API refer
 
 See [`runtimes/README.md`](runtimes/README.md).
 
+## Examples
+
+Ready-to-run commands (introspect, recolor, simulate+render, strain/fit map, colorways)
+are in [`examples/`](examples/README.md): copy one to `~/clo_agent/request.json`, run
+`clo.py` once, read `~/clo_agent/response.json`.
+
 ## What it's good at (and not)
 
 CLO's API is for **varying / tuning / simulating / exporting** on top of pre-made

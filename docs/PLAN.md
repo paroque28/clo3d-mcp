@@ -189,25 +189,27 @@ clo3d-mcp/                    (independent project, based on Ubani-Studio/clo3d-
 
 ## 9. Roadmap
 
-**Phase 0 — Upstream goodwill (done / in flight).** Three clean fix branches exist:
-`fix/clo2026-api-signatures`, `fix/plugin-comm-dir-env`, `feat/verbose-logging`.
-Plus a pending `fix/fastmcp-instructions-kwarg`. Push to `paroque28`; open PRs on
-approval. Include an honest issue documenting the main-thread/starvation ceiling.
+This is an **independent project** — there is no upstream-contribution phase (no PRs to
+Ubani-Studio). Status below is honest about what is verified vs not.
 
-**Phase 1 — Main-thread core (`clo_agent`).** Verified API helpers + runner that
-dumps `result.json` + `snapshot.png`. Prove the loop end-to-end on a real task
-(e.g. the bikini/fabric job): generate script → run once → read back → iterate.
+**Phase 1 — Main-thread core (`runtimes/clo.py`). DONE; live-verify pending.** Shared
+`dispatch()` + verified helpers; writes `response.json` + `snapshot.png`. Loop proven
+once with the earlier runner (introspect + recolor). The *unified* `clo.py` still needs a
+single live run to confirm the refactor on a real CLO build.
 
-**Phase 2 — Tool layer.** MCP tools `run_code`/`snapshot`/`garment_info`/
-`write_script`/`run_script` wired to the core. (Mode A: Claude writes, user clicks
-Run once, Claude reads back.)
+**Phase 2 — Tool layer. DONE.** MCP tools pruned to `run_code` / `introspect` /
+`snapshot` (+ thin `open_file` / `save_project` / `render`). Unit-tested against a mock
+(7 pass). **Not yet exercised through a live MCP connection** to CLO.
 
-**Phase 3 — Capability helpers (Tier 1 → 2).** Topstitch, graphics/prints,
-simulation tuning, render, BOM/tech pack, strain maps; then measurement-CSV authoring
-for avatars.
+**Phase 3 — Capability helpers (Tier 1 → 2). Open.** Most of this is now unnecessary —
+`run_code` reaches it all (see `examples/`). Worth adding only as ergonomic wrappers
+where a multi-step recipe recurs (e.g. measurement-CSV authoring for avatars once the
+CSV schema is pinned; a topstitch helper). Resist re-growing the tool list.
 
-**Phase 4 (optional) — Live C++ plugin.** Only if unattended/no-click automation is
-required. Start from gregor's main-thread-marshaling PoC.
+**Phase 4 (optional) — Live C++ plugin. Designed, not built.** The only idle-proof
+no-click path. Design in `runtimes/cpp-plugin/README.md` (socket + main-thread marshal,
+delegating to the Python `dispatch`). Honestly gated on a local CLO-SDK build env; not
+implementable/verifiable from here, so deliberately left as scaffold + design.
 
 ---
 
