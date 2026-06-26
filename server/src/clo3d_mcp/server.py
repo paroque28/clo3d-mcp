@@ -10,8 +10,10 @@ from clo3d_mcp.connection import get_connection, CLO3DConnectionError
 
 mcp = FastMCP(
     "clo3d",
-    description="Control CLO3D — the industry-standard 3D garment design software. "
-    "Create patterns, manage fabrics, run simulations, export 3D models, and more.",
+    instructions="Control CLO3D — the industry-standard 3D garment design software. "
+    "Create patterns, manage fabrics, run simulations, export 3D models, and more. "
+    "For anything without a dedicated tool, use run_code to execute Python against "
+    "the full CLO API, then snapshot() to see the result.",
 )
 
 
@@ -19,6 +21,33 @@ def _send(command: str, params: dict | None = None) -> dict:
     """Send a command to CLO3D and return the result."""
     conn = get_connection()
     return conn.send_command(command, params)
+
+
+# ─── Power tools (Blender-MCP style: whole API in one call) ─────────────────
+
+
+@mcp.tool()
+def run_code(code: str) -> dict:
+    """Execute arbitrary Python inside CLO3D against its API and return the result.
+
+    The CLO API modules (utility_api, pattern_api, fabric_api, import_api, export_api)
+    and the helpers introspect()/snapshot() are in scope. Set RESULT = <json-able> in
+    your code to return structured data; stdout is captured. This reaches the ENTIRE
+    CLO API in one call — prefer it for anything not covered by a dedicated tool.
+    """
+    return _send("run_code", {"code": code})
+
+
+@mcp.tool()
+def introspect() -> dict:
+    """Full structured read-back of the current scene: project, patterns, fabrics, colorways, avatars, and garment info."""
+    return _send("introspect")
+
+
+@mcp.tool()
+def snapshot(path: str | None = None) -> dict:
+    """Take a 3D viewport snapshot. Returns the saved PNG path — read that file to view the garment."""
+    return _send("snapshot", {"path": path} if path else None)
 
 
 # ─── Scene Tools ───────────────────────────────────────────────────────────

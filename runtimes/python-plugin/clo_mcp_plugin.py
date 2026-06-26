@@ -441,12 +441,70 @@ def handle_get_avatar_genders(params):
     return {"genders": genders or []}
 
 
+# -- Power handlers (Blender-MCP style) --
+
+def handle_snapshot(params):
+    """Take a 3D viewport snapshot; returns the path(s) CLO reports writing."""
+    path = params.get("path") or os.path.join(COMM_DIR, "snapshot.png")
+    returned = export_api.ExportSnapshot3D(path)
+    return {"requested": path, "returned": returned, "exists": os.path.exists(path)}
+
+
+def handle_introspect(params):
+    """Full structured read-back, composed from the typed handlers."""
+    out = {}
+    for key, fn in (("project", handle_get_project_info),
+                    ("patterns", handle_get_pattern_list),
+                    ("fabrics", handle_get_fabric_list),
+                    ("colorways", handle_get_colorways),
+                    ("avatars", handle_get_avatars),
+                    ("garment", handle_get_garment_info)):
+        try:
+            out[key] = fn({})
+        except Exception as e:
+            out[key] = {"error": type(e).__name__ + ": " + str(e)}
+    return out
+
+
+def handle_run_code(params):
+    """Execute arbitrary Python against the CLO API (the whole surface in one call).
+
+    The task body sets RESULT = <json-able> to return data; stdout is captured.
+    The *_api modules plus introspect()/snapshot() helpers are in scope.
+    """
+    import io as _io
+    import traceback as _tb
+    code = params.get("code", "")
+    ns = {
+        "utility_api": utility_api, "pattern_api": pattern_api,
+        "fabric_api": fabric_api, "import_api": import_api,
+        "export_api": export_api,
+        "introspect": lambda: handle_introspect({}),
+        "snapshot": lambda p=None: handle_snapshot({"path": p}),
+        "RESULT": None,
+    }
+    cap = _io.StringIO()
+    real = sys.stdout
+    err = None
+    try:
+        sys.stdout = cap
+        exec(compile(code, "<run_code>", "exec"), ns)
+    except Exception:
+        err = _tb.format_exc()
+    finally:
+        sys.stdout = real
+    return {"result": ns.get("RESULT"), "stdout": cap.getvalue(), "error": err}
+
+
 # ---------------------------------------------------------------------------
 # Handler registry
 # ---------------------------------------------------------------------------
 
 HANDLERS = {
     "ping": handle_ping,
+    "run_code": handle_run_code,
+    "introspect": handle_introspect,
+    "snapshot": handle_snapshot,
     "get_project_info": handle_get_project_info,
     "new_project": handle_new_project,
     "open_file": handle_open_file,
