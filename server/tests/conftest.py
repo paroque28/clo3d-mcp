@@ -1,4 +1,8 @@
-"""Test fixtures: mock CLO3D file-based server for unit testing."""
+"""Test fixtures: a mock CLO agent that speaks the unified Command/Result protocol.
+
+Mirrors runtimes/clo.py's serve transport: poll request.json, dispatch, write a
+Result (protocol/result.schema.json) to response.json. No CLO needed.
+"""
 
 import json
 import os
@@ -7,56 +11,81 @@ import threading
 import time
 import pytest
 
+_FAKE_SCENE = {
+    "project": {
+        "project_name": "TestProject",
+        "project_path": "/tmp/test.zprj",
+        "clo_version": "2026.0.0",
+        "pattern_count": 5,
+        "fabric_count": 3,
+        "colorway_count": 2,
+    },
+    "patterns": [
+        {"index": i, "name": n}
+        for i, n in enumerate(["Front", "Back", "SleeveL", "SleeveR", "Collar"])
+    ],
+    "fabrics": [{"index": 0}, {"index": 1}, {"index": 2}],
+    "colorways": {
+        "current_index": 0,
+        "colorways": [
+            {"index": 0, "name": "Default", "current": True},
+            {"index": 1, "name": "Navy", "current": False},
+        ],
+    },
+    "avatars": {"count": 1, "avatars": []},
+    "garment": None,
+}
 
-class MockCLO3DServer:
-    """Minimal mock of the CLO3D plugin file-based server.
 
-    Polls for request.json in a temp directory, processes commands
-    using built-in handlers, and writes response.json.
-    """
+def _dispatch(command):
+    """Mock of clo.py dispatch(): returns the unified Result shape."""
+    cid = command.get("id")
+    ctype = command.get("type") or "introspect"
+    params = command.get("params") or {}
+    result, err = None, None
+
+    if ctype == "ping":
+        result = {"pong": True, "in_clo3d": False}
+    elif ctype == "introspect":
+        result = _FAKE_SCENE
+    elif ctype == "snapshot":
+        result = {"requested": params.get("path") or "/tmp/snap.png",
+                  "returned": None, "exists": False}
+    elif ctype == "run_code":
+        code = command.get("code") or params.get("code") or ""
+        if "BOOM" in code:
+            err = "RuntimeError: boom"
+        else:
+            result = {"ran": True}
+    else:
+        err = "Unknown command type: " + str(ctype)
+
+    snap = result if ctype == "snapshot" else {"requested": "/tmp/snap.png", "exists": False}
+    return {
+        "ok": err is None,
+        "id": cid,
+        "type": ctype,
+        "result": result,
+        "snapshot": snap,
+        "stdout": "",
+        "errors": {},
+        "task_error": err,
+        "started": "t0",
+        "finished": "t1",
+        "in_clo3d": False,
+        "agent_dir": "/tmp",
+    }
+
+
+class MockCLOAgent:
+    """Polls request.json in a temp dir and writes a unified Result to response.json."""
 
     def __init__(self):
-        self.comm_dir = tempfile.mkdtemp(prefix="clo3d_mcp_test_")
+        self.comm_dir = tempfile.mkdtemp(prefix="clo_agent_test_")
         self.request_file = os.path.join(self.comm_dir, "request.json")
         self.response_file = os.path.join(self.comm_dir, "response.json")
         self._thread = None
         self._running = False
-        self._handlers = {
-            "ping": lambda p: {"pong": True, "in_clo3d": False},
-            "get_project_info": lambda p: {
-                "project_name": "TestProject",
-                "project_path": "/tmp/test.zprj",
-                "clo_version": "7.0.0",
-                "pattern_count": 5,
-                "fabric_count": 3,
-                "colorway_count": 2,
-            },
-            "get_pattern_count": lambda p: {"count": 5},
-            "get_pattern_list": lambda p: {
-                "patterns": [
-                    {"index": 0, "name": "Front Bodice"},
-                    {"index": 1, "name": "Back Bodice"},
-                    {"index": 2, "name": "Sleeve Left"},
-                    {"index": 3, "name": "Sleeve Right"},
-                    {"index": 4, "name": "Collar"},
-                ],
-                "count": 5,
-            },
-            "get_colorways": lambda p: {
-                "colorways": [
-                    {"index": 0, "name": "Default", "current": True},
-                    {"index": 1, "name": "Navy", "current": False},
-                ],
-                "count": 2,
-                "current_index": 0,
-            },
-            "simulate": lambda p: {"simulated": True, "steps": p.get("steps", 100)},
-            "export_obj": lambda p: {
-                "exported": True,
-                "file_path": p.get("file_path", "/tmp/out.obj"),
-                "format": "obj",
-            },
-        }
 
     def start(self):
         self._running = True
@@ -67,8 +96,7 @@ class MockCLO3DServer:
         self._running = False
         if self._thread:
             self._thread.join(timeout=3)
-        # Clean up temp dir
-        for f in [self.request_file, self.response_file]:
+        for f in (self.request_file, self.response_file):
             if os.path.exists(f):
                 try:
                     os.remove(f)
@@ -83,48 +111,26 @@ class MockCLO3DServer:
         while self._running:
             try:
                 if os.path.exists(self.request_file):
-                    with open(self.request_file, "r") as f:
+                    with open(self.request_file) as f:
                         data = f.read()
-
                     try:
                         os.remove(self.request_file)
                     except OSError:
                         pass
-
                     if data.strip():
-                        request = json.loads(data)
-                        req_id = request.get("id")
-                        cmd_type = request.get("type")
-                        params = request.get("params", {})
-
-                        handler = self._handlers.get(cmd_type)
-                        if handler:
-                            result = handler(params)
-                            resp = {"id": req_id, "status": "success", "result": result}
-                        else:
-                            resp = {
-                                "id": req_id,
-                                "status": "error",
-                                "message": f"Unknown command: {cmd_type}",
-                            }
-
+                        resp = _dispatch(json.loads(data))
                         tmp = self.response_file + ".tmp"
                         with open(tmp, "w") as f:
-                            f.write(json.dumps(resp))
-                        if os.path.exists(self.response_file):
-                            os.remove(self.response_file)
-                        os.rename(tmp, self.response_file)
-
-            except Exception as e:
-                print(f"[MockServer] Error: {e}")
-
+                            json.dump(resp, f)
+                        os.replace(tmp, self.response_file)
+            except Exception as e:  # pragma: no cover
+                print("[MockCLOAgent] error:", e)
             time.sleep(0.02)
 
 
 @pytest.fixture
 def mock_server():
-    """Start a mock CLO3D file server and yield it. Stops on teardown."""
-    server = MockCLO3DServer()
+    server = MockCLOAgent()
     server.start()
     yield server
     server.stop()

@@ -15,9 +15,9 @@
       "type": "string",
       "description": "Correlation id echoed from the Command, if any."
     },
-    "mode": {
+    "type": {
       "type": "string",
-      "description": "task | introspect | error — how the run was dispatched."
+      "description": "The command type that was dispatched: run_code | introspect | snapshot | ping."
     },
     "result": {
       "description": "The command's structured output (any JSON value), or null."

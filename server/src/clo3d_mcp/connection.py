@@ -5,8 +5,8 @@ Communicates with the CLO3D plugin via a shared directory.
 The MCP server writes request.json, the plugin reads it, processes,
 and writes response.json. Both sides use atomic writes (temp + rename).
 
-On WSL, auto-detects the Windows temp directory for the shared path.
-Override with CLO3D_MCP_DIR environment variable if needed.
+On WSL, auto-detects the Windows home directory for the shared path.
+Override with CLO_AGENT_DIR environment variable if needed (must match clo.py).
 """
 
 import json
@@ -25,22 +25,20 @@ class CLO3DConnectionError(Exception):
 
 
 def _find_comm_dir():
-    """Determine the shared communication directory.
+    """Determine the shared runtime directory (must match clo.py's CLO_AGENT_DIR).
 
     Priority:
-    1. CLO3D_MCP_DIR env var (explicit override)
-    2. Windows %TEMP%/clo3d_mcp via WSL mount (auto-detect)
-    3. System temp dir fallback
+    1. CLO_AGENT_DIR env var (explicit override)
+    2. Windows ~/clo_agent via WSL mount (auto-detect, server-on-WSL + CLO-on-Windows)
+    3. ~/clo_agent
     """
     # 1. Explicit override
-    env_dir = os.environ.get("CLO3D_MCP_DIR")
+    env_dir = os.environ.get("CLO_AGENT_DIR")
     if env_dir:
         return env_dir
 
-    # 2. Auto-detect WSL: look for Windows user temp via /mnt/c
-    # CLO3D runs on Windows, so the plugin writes to Windows %TEMP%
+    # 2. Auto-detect WSL: CLO runs on Windows, writing to the Windows home dir.
     if os.path.isdir("/mnt/c/Users"):
-        # Try to find the Windows user from /mnt/c/Users
         try:
             users = [
                 d
@@ -49,22 +47,16 @@ def _find_comm_dir():
                 and os.path.isdir(os.path.join("/mnt/c/Users", d))
             ]
             for user in users:
-                temp_dir = os.path.join(
-                    "/mnt/c/Users", user, "AppData", "Local", "Temp", "clo3d_mcp"
-                )
-                # If the dir already exists (plugin is running), use it
-                if os.path.isdir(temp_dir):
-                    return temp_dir
-            # If none found yet, use the first real user
+                d = os.path.join("/mnt/c/Users", user, "clo_agent")
+                if os.path.isdir(d):  # plugin already running here
+                    return d
             if users:
-                return os.path.join(
-                    "/mnt/c/Users", users[0], "AppData", "Local", "Temp", "clo3d_mcp"
-                )
+                return os.path.join("/mnt/c/Users", users[0], "clo_agent")
         except OSError:
             pass
 
-    # 3. Fallback: local temp
-    return os.path.join(os.environ.get("TEMP", "/tmp"), "clo3d_mcp")
+    # 3. Fallback: ~/clo_agent
+    return os.path.join(os.path.expanduser("~"), "clo_agent")
 
 
 class CLO3DConnection:
@@ -178,17 +170,19 @@ class CLO3DConnection:
 
                     response = json.loads(data)
 
-                    # Verify this response matches our request
-                    if response.get("id") != request["id"]:
-                        # Stale response from a previous request, keep waiting
+                    # Match our request. serve mode echoes the id; once mode may
+                    # omit it, so a response without an id is accepted as ours.
+                    rid = response.get("id")
+                    if rid is not None and rid != request["id"]:
                         time.sleep(POLL_INTERVAL)
                         continue
 
-                    if response.get("status") == "error":
-                        error_msg = response.get("message", "Unknown error from CLO3D")
-                        raise CLO3DConnectionError("CLO3D error: " + error_msg)
+                    if not response.get("ok", True):
+                        msg = response.get("task_error") or "Unknown error from CLO3D"
+                        raise CLO3DConnectionError("CLO3D error: " + str(msg))
 
-                    return response.get("result", {})
+                    # Return the full Result (result + stdout + snapshot + errors).
+                    return response
 
                 except (json.JSONDecodeError, ValueError):
                     # File might be partially written, wait and retry
@@ -200,8 +194,8 @@ class CLO3DConnection:
     def ping(self):
         """Test the connection. Returns True if CLO3D responds."""
         try:
-            result = self.send_command("ping", retries=1)
-            return result.get("pong", False)
+            res = self.send_command("ping", retries=1)
+            return bool((res.get("result") or {}).get("pong"))
         except CLO3DConnectionError:
             return False
 

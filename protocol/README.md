@@ -14,14 +14,14 @@ client (server/)                       backend (runtimes/*)
 
 | Backend | Transport | Status |
 |---|---|---|
-| `runtimes/python-script` | files in `CLO_AGENT_DIR` (`task.py` → `result.json`) | **primary** |
-| `runtimes/python-plugin` | files in `~/clo3d_mcp` (`request.json` → `response.json`) | experimental (idle-starves) |
+| `runtimes/clo.py` (MODE=once) | files in `CLO_AGENT_DIR` (`request.json`/`task.py` → `response.json`) | **primary** |
+| `runtimes/clo.py` (MODE=serve) | same files, background poll | experimental (idle-starves) |
 | `runtimes/cpp-plugin` | TCP socket | future |
 
-All three exchange the **same `Command` and `Result` JSON** (`command.schema.json`,
-`result.schema.json`). Only the transport differs. That is the whole point: the C++
-plugin can be added later as a faster transport for the *identical* messages — no client
-changes, no reorg.
+All exchange the **same `Command` and `Result` JSON** (`command.schema.json`,
+`result.schema.json`); `clo.py`'s shared `dispatch()` is the single producer. Only the
+transport differs. That is the whole point: the C++ plugin can be added later as a faster
+transport for the *identical* messages — no client changes, no reorg.
 
 ## Command types
 
